@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Axware Stream Overlay</title>
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; width: 100%; height: 100%;
+    font-family: "Inter", "Plus Jakarta Sans", "Segoe UI", Roboto, system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+  #root { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+  .stage { position: absolute; left: 0; top: 0; overflow: hidden; }
+  .el { position: absolute; box-sizing: border-box; overflow: hidden; display: flex; border-radius: 24px; }
+  .txt { width: 100%; height: 100%; display: flex; align-items: center; padding: 0 0.55em; box-sizing: border-box;
+    white-space: pre-wrap; word-break: break-word; line-height: 1.18; letter-spacing: -0.01em; }
+  .marquee { white-space: nowrap; position: absolute; top: 50%; transform: translateY(-50%); will-change: left; }
+  .list { width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; padding: 0.45em 0.55em;
+    box-sizing: border-box; gap: 0.28em; }
+  .list.top { justify-content: flex-start; }
+  .row { display: flex; gap: 0.42em; align-items: baseline; animation: slideIn .32s cubic-bezier(.16,1,.3,1); line-height: 1.24; }
+  .badge { font-size: .6em; font-weight: 800; padding: .16em .5em; border-radius: 999px; color: #060913; flex: none; letter-spacing: .02em; }
+  .user { font-weight: 700; flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .msg { opacity: .94; overflow: hidden; text-overflow: ellipsis; }
+  .lb-title { font-weight: 800; padding: .4em .58em .24em; display: flex; justify-content: space-between; letter-spacing: -0.01em; }
+  .lb-row { display: flex; align-items: center; gap: .52em; padding: .3em .55em; border-radius: .75em; margin: .14em .34em;
+    background: rgba(255,255,255,.055); border: 1px solid rgba(255,255,255,.06); }
+  .rank { width: 1.7em; height: 1.7em; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: .78em; flex: none; color:#060913; }
+  .pts { margin-left: auto; font-weight: 700; opacity: .88; font-variant-numeric: tabular-nums; }
+  .counter { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .counter .num { font-weight: 900; line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .counter .lbl { font-size: .4em; opacity: .78; margin-top: .24em; text-transform: uppercase; letter-spacing: .1em; font-weight: 700; }
+  .prog { width: 100%; height: 100%; padding: .38em .65em; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; gap: .32em; }
+  .prog .bar { height: 36%; border-radius: 999px; background: rgba(255,255,255,.12); overflow: hidden; border: 1px solid rgba(255,255,255,.06); }
+  .prog .fill { height: 100%; border-radius: 999px; transition: width .6s cubic-bezier(.2,.8,.2,1); }
+  .prog .meta { display: flex; justify-content: space-between; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .alert { position: relative; z-index: 2; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; text-align: center; padding: .45em .65em; box-sizing: border-box; font-weight: 800; border-radius: 24px; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+  .alert.hidden { opacity: 0; transform: scale(.6); pointer-events: none; }
+  .alert.show { animation: pop .38s cubic-bezier(.16,1,.3,1); }
+  @keyframes slideIn { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
+  @keyframes pop { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: scale(1); } }
+  .anim-PULSE { animation: pulse 1.6s ease-in-out infinite; }
+  .anim-FLOAT { animation: floaty 3s ease-in-out infinite; }
+  .anim-BLINK { animation: blink 1.2s steps(2, start) infinite; }
+  .anim-SPIN { animation: spin 6s linear infinite; }
+  @keyframes pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+  @keyframes floaty { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-12px); } }
+  @keyframes blink { to { visibility: hidden; } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .tr-out-FADE { transition: opacity .5s; opacity: 0; }
+  .tr-out-SLIDE { transition: transform .5s ease-in, opacity .5s; transform: translateX(-100%); opacity: 0; }
+  .tr-out-ZOOM { transition: transform .5s ease-in, opacity .5s; transform: scale(1.25); opacity: 0; }
+  .tr-out-MORPH { transition: filter .5s, opacity .5s; filter: blur(18px); opacity: 0; }
+  .tr-out-NONE { opacity: 0; }
+  .tr-in { animation: trIn .5s ease-out; }
+  @keyframes trIn { from { opacity: 0; } to { opacity: 1; } }
+  .el.morph { transition: left .6s cubic-bezier(.2,.8,.2,1), top .6s cubic-bezier(.2,.8,.2,1), width .6s, height .6s; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+(function () {
+  "use strict";
+  var params = new URLSearchParams(location.search);
+  var onlyEl = params.get("el");
+  var forcedScene = params.get("scene");
+  var root = document.getElementById("root");
+  var project = null, stats = {}, events = [], alertQueue = [], alertBusy = false;
+  var currentSceneId = null, stage = null;
+
+  function argb(v) {
+    v = Number(v) || 0;
+    var a = Math.floor(v / 16777216) % 256, r = Math.floor(v / 65536) % 256, g = Math.floor(v / 256) % 256, b = v % 256;
+    return "rgba(" + r + "," + g + "," + b + "," + (a / 255).toFixed(3) + ")";
+  }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  function fmt(n) { n = Number(n) || 0; if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M"; if (n >= 1e4) return (n / 1e3).toFixed(1).replace(/\.0$/, "") + "K"; return String(n); }
+  var METRIC_LABEL = { CHAT: "Komentar", GIFT: "Gift", DIAMOND: "Diamond", LIKE: "Like", FOLLOW: "Follow", SHARE: "Share", REPOST: "Repost", SUBSCRIBE: "Sub", DONATION: "Donasi", VIEWERS: "Penonton", JOIN: "Join" };
+  var TYPE_COLOR = { GIFT: "#FF2D55", FOLLOW: "#00F2FE", SHARE: "#10B981", REPOST: "#A98BFF", LIKE: "#FF6B8B", SUBSCRIBE: "#FBBF24", DONATION: "#F59E0B" };
+  function metric(m) { return Number(stats[m] || 0); }
+  function lastEvent() { return events.length ? events[events.length - 1] : null; }
+  function tokens(t, ev) {
+    ev = ev || lastEvent() || {};
+    var top = (stats.leaderboard && stats.leaderboard[0]) || {};
+    return String(t || "")
+      .replace(/\{viewers\}/g, fmt(metric("VIEWERS"))).replace(/\{chat\}/g, fmt(metric("CHAT")))
+      .replace(/\{gift\}/g, fmt(metric("GIFT"))).replace(/\{like\}/g, fmt(metric("LIKE")))
+      .replace(/\{follow\}/g, fmt(metric("FOLLOW"))).replace(/\{share\}/g, fmt(metric("SHARE"))).replace(/\{repost\}/g, fmt(metric("REPOST")))
+      .replace(/\{donation\}/g, fmt(metric("DONATION"))).replace(/\{top_user\}/g, top.user || "-")
+      .replace(/\{diamond\}/g, fmt(metric("DIAMOND"))).replace(/\{top_gifter\}/g, ((stats.topGifters || [])[0] || {}).user || "-")
+      .replace(/\{last_user\}/g, ev.user || "-").replace(/\{last_message\}/g, ev.message || "")
+      .replace(/\{user\}/g, ev.user || "-").replace(/\{message\}/g, ev.message || ev.typeLabel || "")
+      .replace(/\{amount\}/g, ev.amountText || (ev.amount ? fmt(ev.amount) : "")).replace(/\{platform\}/g, ev.platformLabel || "");
+  }
+  function sceneOf() {
+    if (!project) return null;
+    var id = forcedScene || project.activeSceneId;
+    for (var i = 0; i < project.scenes.length; i++) if (project.scenes[i].id === id) return project.scenes[i];
+    return project.scenes[0];
+  }
+
+  function baseStyle(node, e, offX, offY) {
+    node.style.left = (e.x - offX) + "px"; node.style.top = (e.y - offY) + "px";
+    node.style.width = e.w + "px"; node.style.height = e.h + "px";
+    node.style.opacity = e.opacity; node.style.fontSize = e.fontSize + "px";
+    node.style.color = argb(e.textColor); node.style.background = argb(e.bgColor);
+    node.style.borderRadius = (e.shape === "CIRCLE" ? "50%" : (e.cornerRadius != null ? e.cornerRadius : 24) + "px");
+    node.style.border = e.borderWidth > 0 ? (e.borderWidth + "px solid " + argb(e.borderColor)) : "none";
+    node.style.fontWeight = e.bold ? "800" : "500";
+    node.style.transform = e.rotation ? "rotate(" + e.rotation + "deg)" : "";
+    node.style.justifyContent = e.align === "CENTER" ? "center" : (e.align === "RIGHT" ? "flex-end" : "flex-start");
+    node.style.textAlign = e.align === "CENTER" ? "center" : (e.align === "RIGHT" ? "right" : "left");
+  }
+
+  function eventRows(e, filterChat) {
+    var list = events.filter(function (ev) { return filterChat ? ev.type === "CHAT" : ev.type !== "CHAT"; }).slice(-(e.maxItems || 6));
+    return list.map(function (ev) {
+      var txt = filterChat ? ev.message : (ev.message || "") + (ev.amountText ? " " + ev.amountText : "") + (ev.diamonds ? " · " + fmt(ev.diamonds) + " 💎" : "");
+      var uc = ev.userColor || argb(e.accentColor);
+      var badge = filterChat ? "" : '<span class="badge" style="background:' + esc(TYPE_COLOR[ev.type] || "#94A3B8") + '">' + esc(ev.typeLabel) + '</span>';
+      return '<div class="row">' + badge + '<span class="user" style="color:' + esc(uc) + '">' + esc(ev.user) + '</span><span class="msg">' + esc(txt) + '</span></div>';
+    }).join("");
+  }
+
+  function imageRect(fit, bw, bh, iw, ih, zoom, panX, panY) {
+    if (!(iw > 0 && ih > 0 && bw > 0 && bh > 0)) return [0, 0, bw, bh];
+    var z = Math.min(4, Math.max(0.2, zoom == null ? 1 : zoom)), sx, sy;
+    if (fit === "COVER") { sx = sy = Math.max(bw / iw, bh / ih) * z; }
+    else if (fit === "STRETCH") { sx = bw / iw * z; sy = bh / ih * z; }
+    else { sx = sy = Math.min(bw / iw, bh / ih) * z; }
+    var dw = iw * sx, dh = ih * sy;
+    var px = Math.min(1, Math.max(-1, panX || 0)), py = Math.min(1, Math.max(-1, panY || 0));
+    var l = (bw - dw) * (px + 1) / 2, t = (bh - dh) * (py + 1) / 2;
+    return [l, t, l + dw, t + dh];
+  }
+  function layoutImage(im, e) {
+    var b = e.borderWidth > 0 ? e.borderWidth : 0;
+    var r = imageRect(e.fit || "CONTAIN", e.w, e.h, im.naturalWidth, im.naturalHeight, e.imgZoom, e.imgPanX, e.imgPanY);
+    im.style.left = (r[0] - b) + "px"; im.style.top = (r[1] - b) + "px";
+    im.style.width = (r[2] - r[0]) + "px"; im.style.height = (r[3] - r[1]) + "px";
+    im.style.transform = e.flipH ? "scaleX(-1)" : "";
+    im.style.visibility = "visible";
+  }
+
+  function renderContent(node, e) {
+    var inner = "";
+    switch (e.type) {
+      case "TEXT": inner = '<div class="txt">' + esc(e.text) + "</div>"; break;
+      case "DYNAMIC_TEXT": inner = '<div class="txt">' + esc(tokens(e.text)) + "</div>"; break;
+      case "CLOCK": inner = '<div class="txt" data-clock="1"></div>'; break;
+      case "SHAPE": inner = e.shape === "LINE" ? '<div style="width:100%;height:' + Math.max(2, e.borderWidth || 4) + 'px;margin:auto 0;border-radius:999px;background:' + argb(e.accentColor) + '"></div>' : ""; break;
+      case "IMAGE":
+        node.style.display = "block";
+        inner = e.media ? '<div style="position:absolute;left:0;top:0;right:0;bottom:0;border-radius:inherit;overflow:hidden"><img data-fit="1" src="/media/' + encodeURIComponent(e.media) + '" style="position:absolute;left:0;top:0;max-width:none;visibility:hidden"></div>' : "";
+        break;
+      case "RUNNING_TEXT": case "LIVE_TICKER":
+        var t = e.type === "RUNNING_TEXT" ? e.text : events.slice(-5).map(function (ev) { return ev.user + ": " + (ev.message || ev.typeLabel); }).join("   •   ") || "Menunggu event live…";
+        inner = '<div class="marquee" data-speed="' + (e.speed || 120) + '">' + esc(t) + "</div>"; break;
+      case "CHAT": inner = '<div class="list">' + eventRows(e, true) + "</div>"; break;
+      case "EVENT_FEED": inner = '<div class="list">' + eventRows(e, false) + "</div>"; break;
+      case "LEADERBOARD":
+        var byDiamond = String(e.metric || "").toUpperCase() !== "POINTS";
+        var lb = ((byDiamond ? stats.topGifters : stats.leaderboard) || []).slice(0, e.maxItems || 5);
+        var medal = ["#FBBF24", "#C0C7D6", "#E39B6B"];
+        inner = '<div style="width:100%"><div class="lb-title"><span>' + esc(e.text || (byDiamond ? "Top Gifter" : "Top Supporters")) + '</span><span style="color:' + argb(e.accentColor) + '">LIVE</span></div>' +
+          lb.map(function (r, i) { return '<div class="lb-row"><span class="rank" style="background:' + (medal[i] || argb(e.accentColor)) + '">' + (i + 1) + '</span><span class="user">' + esc(r.user) + '</span><span class="pts">' + (byDiamond ? fmt(r.diamonds) + " 💎" : fmt(r.points) + " pts") + "</span></div>"; }).join("") +
+          (lb.length ? "" : '<div class="lb-row" style="opacity:.6">' + (byDiamond ? "Belum ada gift" : "Belum ada supporter") + '</div>') + "</div>";
+        break;
+      case "COUNTER":
+        inner = '<div class="counter"><div class="num" style="color:' + argb(e.accentColor) + '">' + fmt(metric(e.metric)) + '</div><div class="lbl" style="font-size:' + (e.fontSize * 0.4) + 'px">' + esc(e.text || METRIC_LABEL[e.metric]) + "</div></div>"; break;
+      case "PROGRESS":
+        var val = metric(e.metric), goal = Math.max(1, e.goal || 100), pct = Math.min(100, val / goal * 100);
+        inner = '<div class="prog"><div class="meta"><span>' + esc(e.text || ("Goal " + METRIC_LABEL[e.metric])) + "</span><span>" + fmt(val) + " / " + fmt(goal) + '</span></div><div class="bar"><div class="fill" style="width:' + pct.toFixed(1) + "%;background:" + argb(e.accentColor) + '"></div></div></div>'; break;
+      case "WEB":
+        node.style.background = "transparent"; node.style.border = "none"; node.style.overflow = "hidden";
+        if (/^https?:\/\/[^\s]+$/.test(e.url || "")) {
+          var ps = 1.5 * Math.min(4, Math.max(0.25, e.pageScale || 1));
+          inner = '<iframe src="' + esc(e.url) + '" allow="autoplay; encrypted-media" scrolling="no" style="position:absolute;left:0;top:0;border:0;border-radius:inherit;background:transparent;width:' + (100 / ps) + '%;height:' + (100 / ps) + '%;transform:scale(' + ps + ');transform-origin:0 0"></iframe>';
+        }
+        break;
+      case "ALERT": inner = '<div class="alert hidden" data-alert="' + esc(e.id) + '"></div>'; node.style.background = "transparent"; node.style.border = "none"; break;
+    }
+    node.innerHTML = inner;
+    if (e.type === "IMAGE") { var im = node.querySelector("img[data-fit]"); if (im) { im.onload = function () { layoutImage(im, e); }; if (im.complete && im.naturalWidth) layoutImage(im, e); } }
+    var anim = node.firstChild;
+    if (anim && e.animation && e.animation !== "NONE") anim.classList.add("anim-" + e.animation);
+  }
+
+  function buildStage(scene) {
+    var s = document.createElement("div");
+    s.className = "stage";
+    var offX = 0, offY = 0, W = scene.width, H = scene.height;
+    var els = scene.elements.filter(function (e) { return e.visible; });
+    if (onlyEl) {
+      els = els.filter(function (e) { return e.id === onlyEl; });
+      if (els[0]) { offX = els[0].x; offY = els[0].y; W = els[0].w; H = els[0].h; }
+    }
+    s.style.width = W + "px"; s.style.height = H + "px";
+    s._W = W; s._H = H; s._offX = offX; s._offY = offY;
+    els.forEach(function (e) {
+      var n = document.createElement("div");
+      n.className = "el"; n.dataset.id = e.id; n._e = e;
+      baseStyle(n, e, offX, offY); renderContent(n, e); s.appendChild(n);
+    });
+    return s;
+  }
+
+  function fit() {
+    if (!stage) return;
+    var sc = Math.min(window.innerWidth / stage._W, window.innerHeight / stage._H);
+    root.style.transform = "scale(" + sc + ")";
+    root.style.left = ((window.innerWidth - stage._W * sc) / 2) + "px";
+    root.style.top = ((window.innerHeight - stage._H * sc) / 2) + "px";
+  }
+
+  function render(transition) {
+    var scene = sceneOf(); if (!scene) return;
+    var changed = currentSceneId !== null && currentSceneId !== scene.id;
+    if (changed && transition === "MORPH" && stage) {
+      var next = buildStage(scene), old = stage;
+      Array.prototype.forEach.call(next.children, function (n) {
+        var match = Array.prototype.find.call(old.children, function (o) { return o._e.name === n._e.name && o._e.type === n._e.type; });
+        if (match) { var to = { l: n.style.left, t: n.style.top, w: n.style.width, h: n.style.height }; n.style.left = match.style.left; n.style.top = match.style.top; n.style.width = match.style.width; n.style.height = match.style.height; n.classList.add("morph"); requestAnimationFrame(function () { requestAnimationFrame(function () { n.style.left = to.l; n.style.top = to.t; n.style.width = to.w; n.style.height = to.h; }); }); }
+        else n.classList.add("tr-in");
+      });
+      root.innerHTML = ""; root.appendChild(next); stage = next;
+    } else if (changed && stage) {
+      var oldStage = stage, ns = buildStage(scene);
+      ns.classList.add("tr-in");
+      oldStage.classList.add("tr-out-" + (transition || "FADE"));
+      root.appendChild(ns); stage = ns;
+      setTimeout(function () { if (oldStage.parentNode) oldStage.parentNode.removeChild(oldStage); }, 520);
+    } else {
+      root.innerHTML = ""; stage = buildStage(scene); root.appendChild(stage);
+    }
+    currentSceneId = scene.id;
+    fit(); tick(); startMarquees();
+  }
+
+  function refreshDynamic() {
+    if (!stage) return;
+    Array.prototype.forEach.call(stage.children, function (n) {
+      var e = n._e; if (!e || !e.type) return;
+      if (["DYNAMIC_TEXT", "CHAT", "EVENT_FEED", "LEADERBOARD", "COUNTER", "PROGRESS", "LIVE_TICKER"].indexOf(e.type) >= 0) {
+        if (e.type === "LIVE_TICKER") { var m = n.querySelector(".marquee"); if (m) m.textContent = events.slice(-5).map(function (ev) { return ev.user + ": " + (ev.message || ev.typeLabel); }).join("   •   ") || "Menunggu event live…"; return; }
+        renderContent(n, e);
+      }
+    });
+  }
+
+  function tick() {
+    if (!stage) return;
+    var now = new Date(), hh = ("0" + now.getHours()).slice(-2), mm = ("0" + now.getMinutes()).slice(-2), ss = ("0" + now.getSeconds()).slice(-2);
+    Array.prototype.forEach.call(stage.querySelectorAll("[data-clock]"), function (c) { c.textContent = hh + ":" + mm + ":" + ss; });
+  }
+  setInterval(tick, 1000);
+
+  var marqueeRaf = null, lastT = 0;
+  function startMarquees() {
+    if (marqueeRaf) cancelAnimationFrame(marqueeRaf);
+    lastT = performance.now();
+    function step(t) {
+      var dt = (t - lastT) / 1000; lastT = t;
+      if (stage) Array.prototype.forEach.call(stage.querySelectorAll(".marquee"), function (m) {
+        var w = m.parentNode.clientWidth, x = (m._x == null ? w : m._x) - Number(m.dataset.speed) * dt;
+        if (x < -m.scrollWidth) x = w;
+        m._x = x; m.style.left = x + "px";
+      });
+      marqueeRaf = requestAnimationFrame(step);
+    }
+    marqueeRaf = requestAnimationFrame(step);
+  }
+
+  var ALERT_ALL = { GIFT: 1, FOLLOW: 1, SHARE: 1, REPOST: 1, SUBSCRIBE: 1, DONATION: 1 };
+  function matchesTrigger(trig, ev) { return ev.type !== "CHAT" && ((trig || "ALL") === "ALL" ? !!ALERT_ALL[ev.type] : trig === ev.type); }
+  function runAlerts() {
+    if (alertBusy || !alertQueue.length || !stage) return;
+    var ev = alertQueue.shift();
+    var targets = Array.prototype.filter.call(stage.children, function (n) { return n._e && n._e.type === "ALERT" && matchesTrigger(n._e.trigger, ev); });
+    if (!targets.length) { runAlerts(); return; }
+    alertBusy = true;
+    var dur = 5;
+    targets.forEach(function (n) {
+      var e = n._e, box = n.querySelector(".alert"); dur = Math.max(1, e.durationSec || 5);
+      box.textContent = tokens(e.text || "{user} • {message} {amount}", ev);
+      var bg = (Number(e.bgColor) && Math.floor(Number(e.bgColor) / 16777216) % 256 > 0) ? e.bgColor : 0xEEFF2D55;
+      box.style.background = argb(bg); box.style.borderRadius = (e.cornerRadius != null ? e.cornerRadius : 24) + "px";
+      box.style.border = e.borderWidth > 0 ? (e.borderWidth + "px solid " + argb(e.borderColor)) : "none";
+      box.classList.remove("hidden"); box.classList.remove("show"); void box.offsetWidth; box.classList.add("show");
+    });
+    setTimeout(function () {
+      targets.forEach(function (n) { var b = n.querySelector(".alert"); if (b) { b.classList.remove("show"); b.classList.add("hidden"); } });
+      setTimeout(function () { alertBusy = false; runAlerts(); }, 300);
+    }, dur * 1000);
+  }
+
+  function onProject(p) {
+    var oldActive = project && (forcedScene || project.activeSceneId);
+    project = p;
+    var scene = sceneOf();
+    render(oldActive && scene && oldActive !== scene.id ? scene.transition : null);
+  }
+
+  function connect() {
+    var es = new EventSource("/events");
+    es.addEventListener("project", function (m) { onProject(JSON.parse(m.data)); });
+    es.addEventListener("stats", function (m) { stats = JSON.parse(m.data); refreshDynamic(); });
+    es.addEventListener("live", function (m) {
+      var ev = JSON.parse(m.data); if (ev.type !== "JOIN") { events.push(ev); if (events.length > 100) events.shift(); }
+      refreshDynamic(); alertQueue.push(ev); runAlerts();
+    });
+    es.onerror = function () { /* EventSource menyambung ulang otomatis */ };
+  }
+
+  window.addEventListener("resize", fit);
+  fetch("/api/state").then(function (r) { return r.json(); }).then(function (s) { stats = s.stats || {}; events = s.events || []; })
+    .catch(function () {}).then(function () { return fetch("/api/project"); })
+    .then(function (r) { return r.json(); }).then(onProject).catch(function () {}).then(connect);
+  window.__axware = { get project() { return project; }, get stats() { return stats; }, get events() { return events; } };
+})();
+</script>
+</body>
+</html>
